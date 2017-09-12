@@ -591,7 +591,7 @@ private:
 			auto self(shared_from_this());
 
 			//	set updated pingTimeout
-			m_pingTimeoutTimer.expires_from_now(boost::posix_time::seconds(m_pingTimeout));
+			m_pingTimeoutTimer.expires_from_now(boost::posix_time::milliseconds(m_pingTimeout));
 
 			m_pingTimeoutTimer.async_wait( [ self, this ](const boost::system::error_code& ec) {
 				if(ec) {
@@ -1011,6 +1011,7 @@ private:
 							m_authToken			= json::parse(jwtPayload);
 							m_signedAuthToken	= jwtToken;
 
+							//	:TODO: authTokenChange event
 							triggerEvent<AuthenticateEvent>(m_signedAuthToken);
 						} catch(std::invalid_argument) {
 							//	failed to parse JSON
