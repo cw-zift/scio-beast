@@ -2,7 +2,14 @@
 [SocketCluster.io](socketcluster.io) C++ client utilizing [Boost.Beast](https://github.com/boostorg/beast) and [modern JSON](https://github.com/nlohmann/json).
 
 # Status
-Work in progress
+Early work in progress!
+
+## Needing Attention
+* Simplify wss:// vs ws:// code
+* MessagePack support
+* SCChannel.publish()
+* Public key pinning support
+* General code cleanup
 
 # Dependencies
 * C++11 or higher
