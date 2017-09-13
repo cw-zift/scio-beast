@@ -192,6 +192,11 @@ public:
 	uint32_t		maxDelay;		//	milliseconds
 };
 
+class SecureConnectOptions {
+public:
+	std::shared_ptr<ssl::context>	context;
+};
+
 class ConnectOptions {
 public:
 	ConnectOptions()
@@ -214,10 +219,8 @@ public:
 		return *this;
 	}
 
-	ConnectOptions& setSecure(std::shared_ptr<ssl::context> context, const std::string& p = "443") {
-		sslContext	= context;
-		secure		= context ? true : false;
-		port		= p;
+	ConnectOptions& setSecure() {
+		secure		= true;
 		return *this;
 	}
 
@@ -243,7 +246,7 @@ public:
 	bool							autoReconnect;
 	AutoReconnectOptions			autoReconnectOptions;
 	uint32_t						ackTimeout;
-	std::shared_ptr<ssl::context>	sslContext;
+	SecureConnectOptions			secureOptions;
 };
 
 class SCSocket
@@ -285,7 +288,7 @@ public:
 
 	explicit SCSocket(const ConnectOptions& connectOptions)
 		: m_state(State::CLOSED)
-		, m_sslContext(connectOptions.sslContext)
+		, m_sslContext(connectOptions.secureOptions.context)
 		, m_connectOptions(connectOptions)
 		, m_resolver(m_ios)
 		, m_nextCallId(1)
@@ -293,7 +296,7 @@ public:
 		, m_pingTimeout(connectOptions.ackTimeout)
 		, m_pingTimeoutTimer(m_ios)
 	{
-		if(connectOptions.secure && connectOptions.sslContext) {
+		if(connectOptions.secure && connectOptions.secureOptions.context) {
 			m_wss.reset(new SecureWebSocket(m_ios, *m_sslContext.get()));
 		} else {
 			m_ws.reset(new WebSocket(m_ios));
