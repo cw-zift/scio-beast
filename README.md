@@ -8,7 +8,6 @@ Early work in progress!
 * Simplify wss:// vs ws:// code
 * MessagePack support
 * SCChannel.publish()
-* Public key pinning support
 * General code cleanup
 
 # Dependencies
