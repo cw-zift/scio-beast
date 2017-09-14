@@ -87,6 +87,7 @@ typedef boost::signals2::signal<void(const boost::system::error_code&)>	EventCon
 typedef boost::signals2::signal<void(const boost::system::error_code&)>	EventDisconnect;
 typedef boost::signals2::signal<void(const std::string&)>				EventHandlerAuthenticate;
 typedef boost::signals2::signal<void(const std::string&)>				EventHandlerAuthTokenChange;
+typedef boost::signals2::signal<void()>									EventHandlerDeauthenticate;
 typedef boost::signals2::signal<void(const std::string&)>				EventHandlerSubscribe;
 
 typedef boost::signals2::signal<
@@ -266,6 +267,7 @@ public:
 
 		AuthenticateEvent,
 		AuthTokenChangeEvent,
+		DeauthenticateEvent,
 
 		SubscribeEvent,
 		SubscribeFailEvent,
@@ -510,6 +512,7 @@ private:
 		EventDisconnect,
 		EventHandlerAuthenticate,
 		EventHandlerAuthTokenChange,
+		EventHandlerDeauthenticate,
 		EventHandlerSubscribe,
 		EventHandlerSubscribeFail,
 		EventHandlerSubscriptionStateChange,
@@ -957,6 +960,11 @@ private:
 		json payload;
 		try {
 			payload = json::parse(buf);
+
+			if(!payload.is_object()) {
+				//	:TODO: emit error
+				return ioPumpWrite();
+			}
 		} catch(std::invalid_argument& ia) {
 			//	:TODO: how to handle this - emit error?
 		}
@@ -969,10 +977,9 @@ private:
 				break;
 
 			case ProtocolEvent::PUBLISH :
-				{
-					//	:TODO: ref& here ?
-					const json data					= payload.value("data", json::object());
-					const std::string channelName	= data.value("channel", detail::EMPTY_STRING);
+				try {
+					json const& data				= payload.at("data");
+					std::string const& channelName	= data.at("channel");
 
 					try {
 						auto channel = m_channels.at(channelName);
@@ -980,26 +987,29 @@ private:
 					} catch(std::out_of_range) {
 						//	:TODO: anything?
 					}
+
+				} catch(std::out_of_range) {
+					//	:TODO: emit error
 				}
 				break;
 
 			case ProtocolEvent::REMOVE_TOKEN :
 				m_signedAuthToken	= detail::EMPTY_STRING;
 				m_authToken			= json::object();
+				
+				//	:TODO: should m_pingTimeout reset to ackTimeout ?
 
-				//	:TODO: emit token deauthenticate here
-
+				triggerEvent<DeauthenticateEvent>();
 				break;
 
 			case ProtocolEvent::SET_TOKEN :
-				{
-					//	:TODO: ref& here ?
-					const json data				= payload.value("data", json::object());
-					const std::string jwtToken	= data.value("token", detail::EMPTY_STRING);
+				try {
+					json const& data			= payload.at("data");
+					std::string const& jwtToken	= data.at("token");
 
 					//	update pingTimeout if possible
 					m_pingTimeout				= data.value("pingTimeout", m_pingTimeout);
-
+					
 					//
 					//	Raw JWT should be in header.payload.signature format
 					//
@@ -1038,11 +1048,15 @@ private:
 					} else {
 						//	:TODO: not a valid JWT -- what to do?
 					}
+
+				} catch(std::out_of_range) {
+					//	:TODO: emit error
 				}
 				break;
 
 			case ProtocolEvent::ACK_RECEIVE :
 				{
+					//	:TODO: ref& .at() here & catch out_of_range
 					const CallId rid = payload.value("rid", 0);
 
 					try {
