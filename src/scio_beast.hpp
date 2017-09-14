@@ -86,6 +86,7 @@ typedef boost::signals2::signal<void(const json&)>						EventHandlerConnect;
 typedef boost::signals2::signal<void(const boost::system::error_code&)>	EventConnectAbort;
 typedef boost::signals2::signal<void(const boost::system::error_code&)>	EventDisconnect;
 typedef boost::signals2::signal<void(const std::string&)>				EventHandlerAuthenticate;
+typedef boost::signals2::signal<void(const std::string&)>				EventHandlerAuthTokenChange;
 typedef boost::signals2::signal<void(const std::string&)>				EventHandlerSubscribe;
 
 typedef boost::signals2::signal<
@@ -264,6 +265,7 @@ public:
 		DisconnectEvent,
 
 		AuthenticateEvent,
+		AuthTokenChangeEvent,
 
 		SubscribeEvent,
 		SubscribeFailEvent,
@@ -507,6 +509,7 @@ private:
 		EventConnectAbort,
 		EventDisconnect,
 		EventHandlerAuthenticate,
+		EventHandlerAuthTokenChange,
 		EventHandlerSubscribe,
 		EventHandlerSubscribeFail,
 		EventHandlerSubscriptionStateChange,
@@ -983,6 +986,9 @@ private:
 			case ProtocolEvent::REMOVE_TOKEN :
 				m_signedAuthToken	= detail::EMPTY_STRING;
 				m_authToken			= json::object();
+
+				//	:TODO: emit token deauthenticate here
+
 				break;
 
 			case ProtocolEvent::SET_TOKEN :
@@ -1013,11 +1019,17 @@ private:
 							const std::string encoded = jwtParts[1];
 							const std::string jwtPayload(Base64(&encoded[0]), Base64(&encoded[0] + encoded.length()));
 
+							//	save to know if we're initially authing
+							const std::string oldJwtToken = m_signedAuthToken;
+							
 							m_authToken			= json::parse(jwtPayload);
 							m_signedAuthToken	= jwtToken;
 
-							//	:TODO: authTokenChange event
-							triggerEvent<AuthenticateEvent>(m_signedAuthToken);
+							if(oldJwtToken.empty()) {
+								triggerEvent<AuthenticateEvent>(m_signedAuthToken);
+							}
+
+							triggerEvent<AuthTokenChangeEvent>(m_signedAuthToken);
 						} catch(std::invalid_argument) {
 							//	failed to parse JSON
 							//	:TODO: handle me!
