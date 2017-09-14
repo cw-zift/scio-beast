@@ -293,7 +293,7 @@ public:
 		, m_resolver(m_ios)
 		, m_nextCallId(1)
 		, m_connectAttempts(0)
-		, m_pingTimeout(connectOptions.ackTimeout)
+		, m_pingTimeout(connectOptions.ackTimeout * 1000)	//	seconds -> ms
 		, m_pingTimeoutTimer(m_ios)
 	{
 		if(connectOptions.secure && connectOptions.secureOptions.context) {
@@ -733,7 +733,7 @@ private:
 
 	void ioErrorHandler(const boost::system::error_code& ec) {
 		if(boost::asio::error::operation_aborted == ec || boost::asio::error::eof == ec) {
-			std::cout << "close error" << std::endl << std::flush;
+			std::cout << "close error: " << ec.message() << std::endl << std::flush;
 			return closeHandler(ec, false);
 		}
 
@@ -967,6 +967,7 @@ private:
 
 			case ProtocolEvent::PUBLISH :
 				{
+					//	:TODO: ref& here ?
 					const json data					= payload.value("data", json::object());
 					const std::string channelName	= data.value("channel", detail::EMPTY_STRING);
 
@@ -986,6 +987,7 @@ private:
 
 			case ProtocolEvent::SET_TOKEN :
 				{
+					//	:TODO: ref& here ?
 					const json data				= payload.value("data", json::object());
 					const std::string jwtToken	= data.value("token", detail::EMPTY_STRING);
 
@@ -1039,7 +1041,7 @@ private:
 							respItem.ackTimer->cancel();
 						}
 						
-						respItem.handler(boost::system::error_code(), payload);
+						respItem.handler(boost::system::error_code(), payload.value("data", json::object()));
 					} catch(std::out_of_range) {
 						//	:TODO: emit error?
 						std::cout << "unknown rid: " << std::dec << rid << std::endl;
