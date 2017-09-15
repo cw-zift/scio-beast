@@ -121,6 +121,8 @@ struct ChannelStateData {
 	ChannelState	newState;
 };
 
+typedef std::function<void(boost::system::error_code ec, const json& resp)> ResponseHandler;
+
 typedef boost::signals2::signal<
 	void(const boost::beast::multi_buffer&)
 >																		EventHandlerRaw;
@@ -142,6 +144,13 @@ typedef boost::signals2::signal<
 typedef boost::signals2::signal<void(const ChannelStateData&)>			EventHandlerSubscriptionStateChange;
 typedef boost::signals2::signal<void(const std::string&)>				EventHandlerUnsubscribe;
 typedef boost::signals2::signal<void(const json&)>						EventHandlerChannel;
+
+typedef boost::signals2::signal<
+	void(const std::string& eventName, const json&, ResponseHandler)
+>																		EventHandlerEmit;
+
+
+//typedef std::function<void(const json&, const boost::system::error_code*>)>	EventEmitResponseFunc;
 
 
 class ChannelSubscriptionOptions {
@@ -254,6 +263,7 @@ public:
 		, path("/socketcluster/")
 		, autoReconnect(true)
 		, ackTimeout(10)
+		, perMessageDeflate(false)
 	{		
 	}
 
@@ -267,8 +277,8 @@ public:
 		return *this;
 	}
 
-	ConnectOptions& setSecure() {
-		secure		= true;
+	ConnectOptions& setSecure(const bool enableSecure = true) {
+		secure = enableSecure;
 		return *this;
 	}
 
@@ -287,6 +297,11 @@ public:
 		return *this;
 	}
 
+	ConnectOptions& setPerMessageDeflate(const bool enabled) {
+		perMessageDeflate = enabled;
+		return *this;
+	}
+
 	std::string						host;
 	std::string						port;
 	bool							secure;	//	SSL/TLS?
@@ -295,6 +310,7 @@ public:
 	AutoReconnectOptions			autoReconnectOptions;
 	uint32_t						ackTimeout;
 	SecureConnectOptions			secureOptions;
+	bool							perMessageDeflate;
 };
 
 class SCSocket
@@ -318,7 +334,9 @@ public:
 		SubscribeEvent,
 		SubscribeFailEvent,
 		SubscriptionStateChangeEvent,
-		UnsubscribeEvent,		
+		UnsubscribeEvent,
+
+		EmitEvent
 	};
 
 	enum class State {
@@ -334,8 +352,6 @@ public:
 
 	typedef std::map<std::string, SCChannelPtr> ChannelSubscriptions;
 
-	typedef std::function<void(boost::system::error_code ec, const json& resp)> ResponseHandler;
-
 	explicit SCSocket(const ConnectOptions& connectOptions)
 		: m_state(State::CLOSED)
 		, m_sslContext(connectOptions.secureOptions.context)
@@ -348,10 +364,24 @@ public:
 	{
 		if(connectOptions.secure && connectOptions.secureOptions.context) {
 			m_wss.reset(new SecureWebSocket(m_ios, *m_sslContext.get()));
+
+			setPerMessageDeflate(m_ws, connectOptions.perMessageDeflate);
 		} else {
 			m_ws.reset(new WebSocket(m_ios));
+
+			setPerMessageDeflate(m_ws, connectOptions.perMessageDeflate);
+
 			m_connectOptions.secure = false;	//	we have no SSL context
-		}		
+		}
+	}
+
+	//	:TODO: make private:
+	template<typename SocketType>
+	void setPerMessageDeflate(SocketType& s, const bool enable) {
+		websocket::permessage_deflate opt;
+		opt.client_enable	= enable;
+		opt.server_enable	= enable;
+		s->set_option(opt);
 	}
 
 	void connect() {
@@ -561,7 +591,8 @@ private:
 		EventHandlerSubscribe,
 		EventHandlerSubscribeFail,
 		EventHandlerSubscriptionStateChange,
-		EventHandlerUnsubscribe		
+		EventHandlerUnsubscribe,
+		EventHandlerEmit
 	> EventTable;
 
 	static const uint32_t RECONENCT_DELAY_INVALID	= 0xffffffff;
@@ -1031,7 +1062,7 @@ private:
 
 					try {
 						auto channel = m_channels.at(channelName);
-						channel->triggerEvent<SCChannel::ChannelEvent>(innerData);//data.value("data", json::object()));
+						channel->triggerEvent<SCChannel::ChannelEvent>(innerData);
 					} catch(std::out_of_range) {
 						//	:TODO: anything?
 					}
@@ -1061,7 +1092,7 @@ private:
 					//
 					//	Raw JWT should be in header.payload.signature format
 					//
-					//	:TODO: Additional validation - see https://tools.ietf.org/html/rfc7519#section-7.2
+					//	:TODO: Additional validation? - see https://tools.ietf.org/html/rfc7519#section-7.2
 					std::vector<std::string> jwtParts;
 					boost::split(jwtParts, jwtToken, boost::is_any_of("."));
 
@@ -1123,8 +1154,34 @@ private:
 				break;
 			
 			case ProtocolEvent::EVENT :
-				//	:TODO: emit the event, generate the ACK and send it back
-				//	....these would go to SCSocket subscribed on<> of that can also write back a response
+				try {
+					//	if we have "cid", a response is requested
+					const CallId cid = payload.value("cid", 0);
+					
+					if(cid) {
+						auto self(shared_from_this());
+
+						(std::get<EmitEvent>(m_eventTable))(
+							payload.at("event"), 
+							payload.at("data"),
+							[ self, this, cid ](boost::system::error_code ec, const json& resp) {
+
+								//	:TODO: if ec, what to do?
+
+								const json emitRespPayload = {
+									{ "rid",		cid },
+									{ "data",		resp },
+								};
+
+								m_outQueue.push(emitRespPayload);
+							}
+						);
+					} else {
+						(std::get<EmitEvent>(m_eventTable))(payload.at("event"), payload.at("data"), 0);
+					}				
+				} catch(std::out_of_range) {
+					triggerEvent<ErrorEvent>(protocol_error);
+				}				
 				break;
 
 			default :
