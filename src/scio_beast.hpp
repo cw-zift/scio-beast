@@ -121,8 +121,6 @@ struct ChannelStateData {
 	ChannelState	newState;
 };
 
-typedef std::function<void(boost::system::error_code ec, const json& resp)> ResponseHandler;
-
 typedef boost::signals2::signal<
 	void(const boost::beast::multi_buffer&)
 >																		EventHandlerRaw;
@@ -145,8 +143,13 @@ typedef boost::signals2::signal<void(const ChannelStateData&)>			EventHandlerSub
 typedef boost::signals2::signal<void(const std::string&)>				EventHandlerUnsubscribe;
 typedef boost::signals2::signal<void(const json&)>						EventHandlerChannel;
 
+typedef std::function<void(const json& resp)> EmitEventResponseHandler;
+
 typedef boost::signals2::signal<
-	void(const std::string& eventName, const json&, ResponseHandler)
+	void(
+		const std::string& eventName, 
+		const json&, EmitEventResponseHandler
+	)
 >																		EventHandlerEmit;
 
 
@@ -338,6 +341,8 @@ public:
 
 		EmitEvent
 	};
+
+	typedef std::function<void(boost::system::error_code ec, const json& resp)> ResponseHandler;
 
 	enum class State {
 		CLOSED,
@@ -1155,18 +1160,16 @@ private:
 			
 			case ProtocolEvent::EVENT :
 				try {
-					//	if we have "cid", a response is requested
 					const CallId cid = payload.value("cid", 0);
 					
+					//	if we have "cid", a response is requested
 					if(cid) {
 						auto self(shared_from_this());
 
 						(std::get<EmitEvent>(m_eventTable))(
 							payload.at("event"), 
 							payload.at("data"),
-							[ self, this, cid ](boost::system::error_code ec, const json& resp) {
-
-								//	:TODO: if ec, what to do?
+							[ self, this, cid ](const json& resp) {
 
 								const json emitRespPayload = {
 									{ "rid",		cid },
