@@ -58,6 +58,51 @@ namespace ssl		= boost::asio::ssl;			//	<boost/asio/ssl.hpp>
 
 namespace scio_beast {
 
+enum errors {
+	protocol_error	 = 0,
+	unexpected_rid,
+	json_parse_failure,
+};
+
+namespace detail {
+	class error_category
+		: public boost::system::error_category
+	{
+	public:
+		const char* name() const BOOST_SYSTEM_NOEXCEPT { return "scio_beast::category"; }
+		std::string message(int e) const {
+			switch(e) {
+				case protocol_error		: return "protocol error";
+				case unexpected_rid		: return "unexpected response id (rid)";
+				case json_parse_failure	: return "json parse failure";
+				default					: return "scio_beast::category error";
+			}
+		}
+	};
+}	//	end detail ns
+
+const boost::system::error_category& error_category() {
+	static detail::error_category instance;
+	return instance;
+}
+
+boost::system::error_code make_error_code(errors e) {
+	return boost::system::error_code(static_cast<int>(e), detail::error_category());
+}
+
+}	//	end scio_beast ns
+
+namespace boost { namespace system {
+
+	template<>
+	struct is_error_code_enum<scio_beast::errors> {
+		BOOST_STATIC_CONSTANT(bool, value = true);
+	};
+
+}}	//	end boost::system ns
+
+namespace scio_beast {
+
 	namespace detail {
 		static const std::string EMPTY_STRING;
 	}	//	end detail ns
@@ -97,6 +142,7 @@ typedef boost::signals2::signal<
 typedef boost::signals2::signal<void(const ChannelStateData&)>			EventHandlerSubscriptionStateChange;
 typedef boost::signals2::signal<void(const std::string&)>				EventHandlerUnsubscribe;
 typedef boost::signals2::signal<void(const json&)>						EventHandlerChannel;
+
 
 class ChannelSubscriptionOptions {
 public:
@@ -962,11 +1008,12 @@ private:
 			payload = json::parse(buf);
 
 			if(!payload.is_object()) {
-				//	:TODO: emit error
+				triggerEvent<ErrorEvent>(protocol_error);
 				return ioPumpWrite();
 			}
 		} catch(std::invalid_argument& ia) {
-			//	:TODO: how to handle this - emit error?
+			triggerEvent<ErrorEvent>(json_parse_failure);
+			return ioPumpWrite();
 		}
 
 		const ProtocolEvent eventType = getEventType(payload);		
@@ -990,7 +1037,7 @@ private:
 					}
 
 				} catch(std::out_of_range) {
-					//	:TODO: emit error
+					triggerEvent<ErrorEvent>(protocol_error);
 				}
 				break;
 
@@ -1042,16 +1089,14 @@ private:
 
 							triggerEvent<AuthTokenChangeEvent>(m_signedAuthToken);
 						} catch(std::invalid_argument) {
-							//	failed to parse JSON
-							//	:TODO: handle me!
-							std::cout << "failed parsing" << std::endl;
+							triggerEvent<ErrorEvent>(protocol_error);
 						}							
 					} else {
 						//	:TODO: not a valid JWT -- what to do?
 					}
 
 				} catch(std::out_of_range) {
-					//	:TODO: emit error
+					triggerEvent<ErrorEvent>(protocol_error);
 				}
 				break;
 
@@ -1072,8 +1117,7 @@ private:
 							payload.value("data", json::object())	//	data is optional
 						);
 					} catch(std::out_of_range) {
-						//	:TODO: emit error?
-						std::cout << "unknown rid: " << std::dec << rid << std::endl;
+						triggerEvent<ErrorEvent>(unexpected_rid);
 					}
 				}
 				break;
