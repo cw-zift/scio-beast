@@ -426,7 +426,6 @@ public:
 			const auto channel = m_channels.at(channelName);
 
 			if(ChannelState::UNSUBSCRIBED != channel->getState()) {
-				std::cout << "unsubscribing..." << std::endl << std::flush;
 				triggerChannelUnsubscribe(channel);
 				sendChannelUnsubscribe(channel);
 			}
@@ -739,7 +738,6 @@ private:
 
 	void ioErrorHandler(const boost::system::error_code& ec) {
 		if(boost::asio::error::operation_aborted == ec || boost::asio::error::eof == ec) {
-			std::cout << "close error: " << ec.message() << std::endl << std::flush;
 			return closeHandler(ec, false);
 		}
 
@@ -798,9 +796,7 @@ private:
 			timeout = m_connectOptions.autoReconnectOptions.maxDelay;
 		}
 
-		std::cout << "want to try reconnect after " << timeout << "ms" << std::endl << std::flush;
-
-		//	:TODO: clear any existing timer
+		//	:TODO: clear any existing timer - use m_reconnectTimer for e.g.
 
 		auto self(shared_from_this());
 
@@ -816,9 +812,9 @@ private:
 	}
 
 	ProtocolEvent getEventType(const json& payload) const {
-		const std::string eventName = payload.value("event", detail::EMPTY_STRING);
+		try {
+			std::string const& eventName = payload.at("event");
 
-		if(!eventName.empty()) {
 			if("#publish" == eventName) {
 				return ProtocolEvent::PUBLISH;
 			} else if("#removeAuthToken" == eventName) {
@@ -828,10 +824,14 @@ private:
 			} else {
 				return ProtocolEvent::EVENT;
 			}
-		} else if(1 == payload.value("rid", 0)) {
+		} catch(std::out_of_range) {
+			//	fall through
+		}
+
+		if(1 == payload.value("rid", 0)) {
 			return ProtocolEvent::IS_AUTHENTICATED;
 		}
-		
+
 		return ProtocolEvent::ACK_RECEIVE;
 	}
 
@@ -980,10 +980,11 @@ private:
 				try {
 					json const& data				= payload.at("data");
 					std::string const& channelName	= data.at("channel");
+					json const& innerData			= data.at("data");
 
 					try {
 						auto channel = m_channels.at(channelName);
-						channel->triggerEvent<SCChannel::ChannelEvent>(data.value("data", json::object()));
+						channel->triggerEvent<SCChannel::ChannelEvent>(innerData);//data.value("data", json::object()));
 					} catch(std::out_of_range) {
 						//	:TODO: anything?
 					}
@@ -1055,8 +1056,7 @@ private:
 				break;
 
 			case ProtocolEvent::ACK_RECEIVE :
-				{
-					//	:TODO: ref& .at() here & catch out_of_range
+				{					
 					const CallId rid = payload.value("rid", 0);
 
 					try {
@@ -1067,7 +1067,10 @@ private:
 							respItem.ackTimer->cancel();
 						}
 						
-						respItem.handler(boost::system::error_code(), payload.value("data", json::object()));
+						respItem.handler(
+							boost::system::error_code(), 
+							payload.value("data", json::object())	//	data is optional
+						);
 					} catch(std::out_of_range) {
 						//	:TODO: emit error?
 						std::cout << "unknown rid: " << std::dec << rid << std::endl;
@@ -1113,11 +1116,9 @@ private:
 
 	void secureConnectHandler(boost::system::error_code ec) {
 		if(ec) {
-			std::cout << "secureConnectHandler ec: " << ec.message() << std::endl << std::flush;
 			return closeHandler(ec, true);
 		}
 
-		std::cout << "secureConnectHandler attempt SSL handshake" << std::endl << std::flush;
 		m_wss->next_layer().async_handshake(
 			ssl::stream_base::client,
 			std::bind(&SCSocket::connectHandler, shared_from_this(), std::placeholders::_1)
@@ -1128,8 +1129,6 @@ private:
 		if(ec) {
 			return closeHandler(ec, true);
 		}
-
-		std::cout << "Connected" << std::endl;	//	:TODO: REMOVE ME
 
 		m_state = State::OPEN;
 		
@@ -1154,8 +1153,6 @@ private:
 			std::cout << "initialHandshakeHandler ec: " << ec.message() << std::endl << std::flush;
 			return;
 		}
-
-		std::cout << "Initial handshake OK" << std::endl;	//	:TODO: REMOVE ME
 
 		//
 		//	Send out a #handshake. We can't use emit as it's a special case
