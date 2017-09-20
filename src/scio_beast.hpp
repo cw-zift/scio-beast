@@ -63,6 +63,7 @@ enum errors {
 	unexpected_rid,
 	json_parse_failure,
 	response_error,
+	ack_timeout,
 };
 
 namespace detail {
@@ -77,6 +78,7 @@ namespace detail {
 				case unexpected_rid		: return "unexpected response id (rid)";
 				case json_parse_failure	: return "json parse failure";
 				case response_error		: return "response contains error";
+				case ack_timeout		: return "acknowledgement timeout";
 				default					: return "scio_beast::category error";
 			}
 		}
@@ -474,7 +476,16 @@ public:
 			const ResponseItem respItem = m_pendingResponses.at(cid);
 			m_pendingResponses.erase(cid);			
 		
-			respItem.handler(make_error_code(boost::system::errc::timed_out), json::object());
+			std::stringstream ackTimeoutErrMsg;
+			ackTimeoutErrMsg << "no ack for call id (cid) " << std::dec << cid;
+
+			const json errorInfo = {
+				{ "error", {
+					{ "message", ackTimeoutErrMsg.str() }
+				}}
+			};
+
+			respItem.handler(make_scio_error_code(ack_timeout), errorInfo);
 		} catch(std::out_of_range) {
 		}		
 	}
