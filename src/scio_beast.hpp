@@ -62,10 +62,11 @@ enum errors {
 	protocol_error	 = 0,
 	unexpected_rid,
 	json_parse_failure,
+	response_error,
 };
 
 namespace detail {
-	class error_category
+	class scio_error_category
 		: public boost::system::error_category
 	{
 	public:
@@ -75,19 +76,20 @@ namespace detail {
 				case protocol_error		: return "protocol error";
 				case unexpected_rid		: return "unexpected response id (rid)";
 				case json_parse_failure	: return "json parse failure";
+				case response_error		: return "response contains error";
 				default					: return "scio_beast::category error";
 			}
 		}
 	};
 }	//	end detail ns
 
-const boost::system::error_category& error_category() {
-	static detail::error_category instance;
+const boost::system::error_category& get_scio_error_category() {
+	static detail::scio_error_category instance;
 	return instance;
 }
 
-boost::system::error_code make_error_code(errors e) {
-	return boost::system::error_code(static_cast<int>(e), detail::error_category());
+boost::system::error_code make_scio_error_code(errors e) {
+	return boost::system::error_code(static_cast<int>(e), get_scio_error_category());
 }
 
 }	//	end scio_beast ns
@@ -561,6 +563,8 @@ public:
 	AuthState getAuthState() const { return m_signedAuthToken.empty() ? AuthState::UNAUTHENTICATED : AuthState::AUTHENTICATED; }
 
 	ChannelSubscriptions const& getChannels() const { return m_channels; }
+
+	boost::asio::io_service& getIoService() { return m_ios; }
 private:	
 	enum class ProtocolEvent {
 		UNKNOWN,
@@ -1044,11 +1048,11 @@ private:
 			payload = json::parse(buf);
 
 			if(!payload.is_object()) {
-				triggerEvent<ErrorEvent>(protocol_error);
+				triggerEvent<ErrorEvent>(make_scio_error_code(protocol_error));
 				return ioPumpWrite();
 			}
 		} catch(std::invalid_argument& ia) {
-			triggerEvent<ErrorEvent>(json_parse_failure);
+			triggerEvent<ErrorEvent>(make_scio_error_code(json_parse_failure));
 			return ioPumpWrite();
 		}
 
@@ -1073,7 +1077,7 @@ private:
 					}
 
 				} catch(std::out_of_range) {
-					triggerEvent<ErrorEvent>(protocol_error);
+					triggerEvent<ErrorEvent>(make_scio_error_code(protocol_error));
 				}
 				break;
 
@@ -1125,14 +1129,14 @@ private:
 
 							triggerEvent<AuthTokenChangeEvent>(m_signedAuthToken);
 						} catch(std::invalid_argument) {
-							triggerEvent<ErrorEvent>(protocol_error);
+							triggerEvent<ErrorEvent>(make_scio_error_code(protocol_error));
 						}							
 					} else {
 						//	:TODO: not a valid JWT -- what to do?
 					}
 
 				} catch(std::out_of_range) {
-					triggerEvent<ErrorEvent>(protocol_error);
+					triggerEvent<ErrorEvent>(make_scio_error_code(protocol_error));
 				}
 				break;
 
@@ -1147,28 +1151,39 @@ private:
 						if(respItem.ackTimer) {
 							respItem.ackTimer->cancel();
 						}
-						
-						respItem.handler(
-							boost::system::error_code(), 
-							payload.value("data", json::object())	//	data is optional
-						);
+
+						try {
+							json const& error = payload.at("error");
+
+							respItem.handler(
+								make_scio_error_code(response_error),
+								error
+							);
+						} catch(std::out_of_range) {
+							respItem.handler(
+								boost::system::error_code(),
+								payload.value("data", json::object())	//	data is optional
+							);
+						}
 					} catch(std::out_of_range) {
-						triggerEvent<ErrorEvent>(unexpected_rid);
+						triggerEvent<ErrorEvent>(make_scio_error_code(unexpected_rid));
 					}
 				}
 				break;
 			
 			case ProtocolEvent::EVENT :
 				try {
-					const CallId cid = payload.value("cid", 0);
+					const CallId cid				= payload.value("cid", 0);
+					std::string const& eventName	= payload.at("event");
+					json const& eventData			= payload.at("data");
 					
 					//	if we have "cid", a response is requested
 					if(cid) {
 						auto self(shared_from_this());
 
 						(std::get<EmitEvent>(m_eventTable))(
-							payload.at("event"), 
-							payload.at("data"),
+							eventName,
+							eventData,
 							[ self, this, cid ](const json& resp) {
 
 								const json emitRespPayload = {
@@ -1180,10 +1195,14 @@ private:
 							}
 						);
 					} else {
-						(std::get<EmitEvent>(m_eventTable))(payload.at("event"), payload.at("data"), 0);
+						(std::get<EmitEvent>(m_eventTable))(
+							eventName,
+							eventData,
+							0	//	no resp handler
+						);
 					}				
 				} catch(std::out_of_range) {
-					triggerEvent<ErrorEvent>(protocol_error);
+					triggerEvent<ErrorEvent>(make_scio_error_code(protocol_error));
 				}				
 				break;
 
