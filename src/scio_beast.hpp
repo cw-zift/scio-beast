@@ -989,11 +989,10 @@ private:
     }
 
     inline bool isCurrentMessageComplete() const {
-        if(m_connectOptions.secure) {
-            return m_wss->is_message_done();
-        }
-
-        return m_ws->is_message_done();
+        return m_connectOptions.secure ? 
+            m_wss->is_message_done() : 
+            m_ws->is_message_done()
+            ;
     }
 
     void readSomeHandler(boost::system::error_code ec) {
