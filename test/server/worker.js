@@ -31,5 +31,11 @@ module.exports.run = function(worker) {
                 return resp(null, respGotIt);
             }, eventData.ackTimeout + 5000);
         });
+
+        socket.on('auth_user', (eventData) => {
+            logEvent('auth_user', eventData);
+
+            socket.setAuthToken( { 'user' : eventData.user } );
+        });
     });
 }
