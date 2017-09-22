@@ -90,7 +90,7 @@ const boost::system::error_category& get_scio_error_category() {
     return instance;
 }
 
-boost::system::error_code make_scio_error_code(errors e) {
+boost::system::error_code make_error_code(errors e) {
     return boost::system::error_code(static_cast<int>(e), get_scio_error_category());
 }
 
@@ -155,10 +155,6 @@ typedef boost::signals2::signal<
         const json&, EmitEventResponseHandler
     )
 >                                                                       EventHandlerEmit;
-
-
-//typedef std::function<void(const json&, const boost::system::error_code*>)>   EventEmitResponseFunc;
-
 
 class ChannelSubscriptionOptions {
 public:
@@ -363,9 +359,9 @@ public:
 
     explicit SCSocket(const ConnectOptions& connectOptions)
         : m_state(State::CLOSED)
-        , m_sslContext(connectOptions.secureOptions.context)
         , m_connectOptions(connectOptions)
         , m_resolver(m_ios)
+        , m_sslContext(connectOptions.secureOptions.context)
         , m_nextCallId(1)
         , m_connectAttempts(0)
         , m_pingTimeout(connectOptions.ackTimeout * 1000)   //  seconds -> ms
@@ -382,15 +378,6 @@ public:
 
             m_connectOptions.secure = false;    //  we have no SSL context
         }
-    }
-
-    //  :TODO: make private:
-    template<typename SocketType>
-    void setPerMessageDeflate(SocketType& s, const bool enable) {
-        websocket::permessage_deflate opt;
-        opt.client_enable   = enable;
-        opt.server_enable   = enable;
-        s->set_option(opt);
     }
 
     void connect() {
@@ -443,7 +430,7 @@ public:
                 
                 payload["cid"] = cid;
 
-                ResponseItem respItem( { respHandler } );               
+                ResponseItem respItem( { respHandler, nullptr } );
 
                 if(!noTimeout) {
                     //
@@ -485,7 +472,7 @@ public:
                 }}
             };
 
-            respItem.handler(make_scio_error_code(ack_timeout), errorInfo);
+            respItem.handler(make_error_code(ack_timeout), errorInfo);
         } catch(std::out_of_range) {
         }       
     }
@@ -564,6 +551,7 @@ public:
             m_ws->close(websocket::close_code::normal, ec);
         }
 
+        //  :TODO: why do we get an error here? Needs investigation
         return ec;
     }
 
@@ -621,16 +609,16 @@ private:
     typedef websocket::stream<ssl::stream<tcp::socket>> SecureWebSocket;    
     typedef std::unique_ptr<WebSocket>                  WebSocketPtr;
     typedef std::unique_ptr<SecureWebSocket>            SecureWebSocketPtr;
-    
+
     State                               m_state;
-    ConnectOptions                      m_connectOptions;
     boost::asio::io_service             m_ios;
+    ConnectOptions                      m_connectOptions;
     tcp::resolver                       m_resolver;
+    std::shared_ptr<ssl::context>       m_sslContext;
     //  :TODO: this is super ugly: It would be nice to have a single m_ws e.g. in a variant. This has proven problematic however.
     //  ...templating is complex in that classes need to ref SCSocket & we want this to be switchable at runtime
     WebSocketPtr                        m_ws;
     SecureWebSocketPtr                  m_wss;
-    std::shared_ptr<ssl::context>       m_sslContext;
     boost::beast::multi_buffer          m_buffer;
     CallId                              m_nextCallId;
     OutQueue                            m_outQueue;
@@ -649,6 +637,13 @@ private:
         m_nextCallId    = 1;
 
         resetPingTimer(true);
+    }
+
+    template<typename SocketType>
+    void setPerMessageDeflate(SocketType& s, const bool enable) {
+        websocket::permessage_deflate opt;
+        opt.client_enable   = enable;
+        s->set_option(opt);
     }
 
     boost::system::error_code internalClose(
@@ -734,7 +729,7 @@ private:
     
             auto self(shared_from_this());
 
-            emit("#subscribe", channelSubData, [ self, this, channel, channelSubOptions ](boost::system::error_code ec, const json& resp) {
+            emit("#subscribe", channelSubData, [ self, this, channel, channelSubOptions ](boost::system::error_code ec, const json&) {
                 if(ec) {
                     return triggerChannelSubscribeFail(channel, ec, channelSubOptions);
                 }
@@ -1058,11 +1053,11 @@ private:
             payload = json::parse(buf);
 
             if(!payload.is_object()) {
-                triggerEvent<ErrorEvent>(make_scio_error_code(protocol_error));
+                triggerEvent<ErrorEvent>(make_error_code(protocol_error));
                 return ioPumpWrite();
             }
         } catch(std::invalid_argument& ia) {
-            triggerEvent<ErrorEvent>(make_scio_error_code(json_parse_failure));
+            triggerEvent<ErrorEvent>(make_error_code(json_parse_failure));
             return ioPumpWrite();
         }
 
@@ -1087,7 +1082,7 @@ private:
                     }
 
                 } catch(std::out_of_range) {
-                    triggerEvent<ErrorEvent>(make_scio_error_code(protocol_error));
+                    triggerEvent<ErrorEvent>(make_error_code(protocol_error));
                 }
                 break;
 
@@ -1139,14 +1134,14 @@ private:
 
                             triggerEvent<AuthTokenChangeEvent>(m_signedAuthToken);
                         } catch(std::invalid_argument) {
-                            triggerEvent<ErrorEvent>(make_scio_error_code(protocol_error));
+                            triggerEvent<ErrorEvent>(make_error_code(protocol_error));
                         }                           
                     } else {
                         //  :TODO: not a valid JWT -- what to do?
                     }
 
                 } catch(std::out_of_range) {
-                    triggerEvent<ErrorEvent>(make_scio_error_code(protocol_error));
+                    triggerEvent<ErrorEvent>(make_error_code(protocol_error));
                 }
                 break;
 
@@ -1166,7 +1161,7 @@ private:
                             json const& error = payload.at("error");
 
                             respItem.handler(
-                                make_scio_error_code(response_error),
+                                make_error_code(response_error),
                                 error
                             );
                         } catch(std::out_of_range) {
@@ -1176,7 +1171,7 @@ private:
                             );
                         }
                     } catch(std::out_of_range) {
-                        triggerEvent<ErrorEvent>(make_scio_error_code(unexpected_rid));
+                        triggerEvent<ErrorEvent>(make_error_code(unexpected_rid));
                     }
                 }
                 break;
@@ -1212,7 +1207,7 @@ private:
                         );
                     }               
                 } catch(std::out_of_range) {
-                    triggerEvent<ErrorEvent>(make_scio_error_code(protocol_error));
+                    triggerEvent<ErrorEvent>(make_error_code(protocol_error));
                 }               
                 break;
 
