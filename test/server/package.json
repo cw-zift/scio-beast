@@ -1,0 +1,14 @@
+{
+  "name": "scio_beast_test_server",
+  "version": "1.0.0",
+  "description": "Test Server for scio_beast C++ client",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Bryan D. Ashby",
+  "license": "BSD-2-Clause",
+  "dependencies": {
+    "socketcluster": "^7.1.1"
+  }
+}
