@@ -6,7 +6,6 @@ Early work in progress!
 
 ## Needing Attention
 * Simplify wss:// vs ws:// code
-* MessagePack support
 * SCChannel.publish()
 * General code cleanup
 
@@ -40,6 +39,14 @@ socket->on<scio::beast::SCSocket::ConnectEvent>(
 
 // connect
 socket->connect();
+```
+
+# Codecs
+Codecs can be created by implementing the `scio_beast::ICodecEngine` interface. A `scio_beast::CodecEngineMinBin` that works with [sc-codec-min-bin](https://github.com/SocketCluster/sc-codec-min-bin) is included. For example:
+```
+std::shared_ptr<scio_beast::ICodecEngine> codecEngine(new scio_beast::CodecEngineMinBin());
+// ...
+connectOptions.setCodecEngine(codecEngine);
 ```
 
 # License
