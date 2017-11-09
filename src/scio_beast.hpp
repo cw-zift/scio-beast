@@ -156,6 +156,189 @@ typedef boost::signals2::signal<
     )
 >                                                                       EventHandlerEmit;
 
+class ICodecEngine {
+public:
+    virtual ~ICodecEngine() {}
+
+    virtual std::string encode(const json& obj) = 0;
+    virtual json decode(const std::string& payload) = 0;
+    virtual bool isBinary() const = 0;
+};
+
+//  Port from sc-codec-min-bin @ https://github.com/SocketCluster/sc-codec-min-bin
+class CodecEngineMinBin
+    : public ICodecEngine
+{
+public:
+    virtual std::string encode(const json& obj) override {
+        json o;
+
+        if(obj.is_array()) {
+            const size_t sz = obj.size();
+            for(size_t i = 0; i < sz; ++i) {
+                o[i] = compressSinglePacket(obj[i]);
+            }
+        } else if(detail::EMPTY_STRING != obj.value("event", "") || 0 != obj.value("rid", 0)) {
+            o = compressSinglePacket(obj);
+        }
+
+        const std::vector<std::uint8_t> msgpack = json::to_msgpack(o);
+        return std::string(msgpack.begin(), msgpack.end());
+    }
+
+    virtual json decode(const std::string& payload) override {
+        json obj = json::from_msgpack(std::vector<uint8_t>(payload.begin(), payload.end()));
+
+        if(obj.is_array()) {
+            const size_t sz = obj.size();
+            for(size_t i = 0; i < sz; ++i) {
+                decompressSinglePacket(obj[i]);
+            }
+        } else if(obj.is_object()) {
+            decompressSinglePacket(obj);
+        }
+
+        return obj;
+    }
+
+    virtual bool isBinary() const override { return true; }
+private:
+    json compressSinglePacket(const json& obj) {
+        json compressedObj = obj;
+
+        compressPublishPacket(compressedObj);
+        compressEmitPacket(compressedObj);
+        compressResponsePacket(compressedObj);
+
+        return compressedObj;
+    }
+
+    void decompressSinglePacket(json& obj) {
+        decompressEmitPacket(obj);
+        decompressPublishPacket(obj);
+        decompressResponsePacket(obj);
+    }
+
+    void compressPublishPacket(json& obj) {
+        try {
+            std::string const& eventName    = obj.at("event");
+            json const& data                = obj.at("data");
+
+            if("#publish" != eventName) {
+                return;
+            }
+
+            json a = { eventName, data.at("data") };
+
+            const CallId cid = obj.value("cid", 0);
+            if(0 != cid) {
+                a.push_back(cid);
+            }
+
+            obj["p"] = a;
+
+            eraseMembers(obj, { "event", "data", "cid" } );
+        } catch(std::out_of_range) {
+            //  nop
+        }
+    }
+
+    void decompressPublishPacket(json& obj) {
+        try {
+            json const& p = obj.at("p");
+
+            obj["event"]    = "#publish";
+            obj["data"]     = {
+                { "channel",    p[0] },
+                { "data",       p[1] }
+            };
+
+            if(p.size() > 2) {
+                obj["cid"] = p[2];
+            }
+
+            obj.erase("p");
+        } catch(std::out_of_range) {
+            //  nop
+        }
+    }
+
+    void compressEmitPacket(json& obj) {
+        try {
+            std::string const& eventName = obj.at("event");
+
+            json a = { eventName, obj.at("data") };
+
+            const CallId cid = obj.value("cid", 0);
+            if(0 != cid) {
+                a.push_back(cid);
+            }
+
+            obj["e"] = a;
+
+            eraseMembers(obj, { "event", "data", "cid" } );
+        } catch(std::out_of_range) {
+            //  nop
+        }
+    }
+
+    void decompressEmitPacket(json& obj) {
+        try {
+            json const&e = obj.at("e");
+
+            obj["event"]    = e[0];
+            obj["data"]     = e[1];
+
+            if(e.size() > 2) {
+                obj["cid"] = e[2];
+            }
+
+            obj.erase("e");
+        } catch(std::out_of_range) {
+            //  nop
+        }
+    }
+
+    void compressResponsePacket(json& obj) {
+        try {
+            const CallId rid = obj.at("rid");
+
+            //  :TODO: do error/data need to be optionals with default to null?
+            obj["r"] = { rid, obj.at("error"), obj.at("data") };
+
+            eraseMembers(obj, { "rid", "error", "data" } );
+        } catch(std::out_of_range) {
+            //  nop
+        }
+    }
+
+    void decompressResponsePacket(json& obj) {
+        try {
+            json const& r = obj.at("r");
+
+            obj["rid"]      = r[0];
+
+            if(!r[1].is_null()) {
+                obj["error"] = r[1];
+            }
+
+            if(!r[2].is_null()) {
+                obj["data"]     = r[2];
+            }
+
+            obj.erase("r");
+        } catch(std::out_of_range) {
+            //  nop
+        }
+    }
+
+    void eraseMembers(json& obj, const std::vector<std::string>& names) {
+        for(auto const& n : names) {
+            obj.erase(n);
+        }
+    }
+};
+
 class ChannelSubscriptionOptions {
 public:
     ChannelSubscriptionOptions()
@@ -266,7 +449,7 @@ public:
         , path("/socketcluster/")
         , autoReconnect(true)
         , ackTimeout(10)
-        , perMessageDeflate(false)
+        , codecEngine(nullptr)
     {       
     }
 
@@ -301,7 +484,17 @@ public:
     }
 
     ConnectOptions& setPerMessageDeflate(const bool enabled) {
-        perMessageDeflate = enabled;
+        perMessageDeflateOpts.client_enable = enabled;
+        return *this;
+    }
+
+    ConnectOptions& setPerMessageDeflate(const websocket::permessage_deflate& pmd) {
+        perMessageDeflateOpts = pmd;
+        return *this;
+    }
+
+    ConnectOptions& setCodecEngine(std::shared_ptr<ICodecEngine> ce) {
+        codecEngine = ce;
         return *this;
     }
 
@@ -313,7 +506,8 @@ public:
     AutoReconnectOptions            autoReconnectOptions;
     uint32_t                        ackTimeout;
     SecureConnectOptions            secureOptions;
-    bool                            perMessageDeflate;
+    std::shared_ptr<ICodecEngine>   codecEngine;
+    websocket::permessage_deflate   perMessageDeflateOpts;
 };
 
 class SCSocket
@@ -370,13 +564,17 @@ public:
         if(connectOptions.secure && connectOptions.secureOptions.context) {
             m_wss.reset(new SecureWebSocket(m_ios, *m_sslContext.get()));
 
-            setPerMessageDeflate(m_ws, connectOptions.perMessageDeflate);
+            setPerMessageDeflate(m_ws);
+
+            m_wss->binary(haveBinaryCodec());
         } else {
             m_ws.reset(new WebSocket(m_ios));
 
-            setPerMessageDeflate(m_ws, connectOptions.perMessageDeflate);
+            setPerMessageDeflate(m_ws);
 
             m_connectOptions.secure = false;    //  we have no SSL context
+
+            m_ws->binary(haveBinaryCodec());
         }
     }
 
@@ -564,6 +762,8 @@ public:
     ChannelSubscriptions const& getChannels() const { return m_channels; }
 
     boost::asio::io_service& getIoService() { return m_ios; }
+
+    ConnectOptions const& getConnectOptions() const { return m_connectOptions; }
 private:    
     enum class ProtocolEvent {
         UNKNOWN,
@@ -622,6 +822,7 @@ private:
     boost::beast::multi_buffer          m_buffer;
     CallId                              m_nextCallId;
     OutQueue                            m_outQueue;
+    std::string                         m_currentOutBuffer;
     PendingResponses                    m_pendingResponses;
     boost::thread                       m_iosThread;
     EventTable                          m_eventTable;
@@ -640,10 +841,8 @@ private:
     }
 
     template<typename SocketType>
-    void setPerMessageDeflate(SocketType& s, const bool enable) {
-        websocket::permessage_deflate opt;
-        opt.client_enable   = enable;
-        s->set_option(opt);
+    void setPerMessageDeflate(SocketType& s) {
+        s->set_option(m_connectOptions.perMessageDeflateOpts);
     }
 
     boost::system::error_code internalClose(
@@ -936,23 +1135,32 @@ private:
         m_ios.run();
     }
 
+    void placeNextWriteQueueItemInPayload() {
+        const json obj = m_outQueue.front();
+        m_outQueue.pop();
+
+        m_currentOutBuffer = m_connectOptions.codecEngine ?
+            m_connectOptions.codecEngine->encode(obj) :
+            obj.dump()
+            ;
+    }
+
     void ioPumpWrite() {
         if(m_outQueue.empty()) {
             //  nothing to write - try to read
             return ioPumpReadSome();
         }
 
-        const std::string payload = m_outQueue.front().dump();
-        m_outQueue.pop();
-        
+        placeNextWriteQueueItemInPayload();
+
         if(m_connectOptions.secure) {
             m_wss->async_write(
-                boost::asio::buffer(payload),
+                boost::asio::buffer(m_currentOutBuffer),
                 std::bind(&SCSocket::pumpWriteHandler, shared_from_this(), std::placeholders::_1)
             );
         } else {
             m_ws->async_write(
-                boost::asio::buffer(payload),
+                boost::asio::buffer(m_currentOutBuffer),
                 std::bind(&SCSocket::pumpWriteHandler, shared_from_this(), std::placeholders::_1)
             );
         }
@@ -1050,7 +1258,10 @@ private:
     
         json payload;
         try {
-            payload = json::parse(buf);
+            payload = m_connectOptions.codecEngine ?
+                m_connectOptions.codecEngine->decode(buf) :
+                json::parse(buf)
+                ;
 
             if(!payload.is_object()) {
                 triggerEvent<ErrorEvent>(make_error_code(protocol_error));
@@ -1288,6 +1499,7 @@ private:
         const json handshakePayload = {
             { "event",  "#handshake" },
             { "data",   nullptr },
+            //{ "data", {{ "authToken", nullptr }} },
             { "cid",    m_nextCallId++ }
         };
 
@@ -1295,7 +1507,12 @@ private:
 
         return ioPumpWrite();
     }
+
+    bool haveBinaryCodec() const {
+        return m_connectOptions.codecEngine && m_connectOptions.codecEngine->isBinary();
+    }
 };
+
 
 void SCChannel::unsubscribe() {
     m_socket->unsubscribe(m_name);
