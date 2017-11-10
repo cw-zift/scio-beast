@@ -498,8 +498,14 @@ public:
         return *this;
     }
 
+    ConnectOptions& setUserAgent(const std::string& ua) {
+        userAgent = ua;
+        return *this;
+    }
+
     std::string                     host;
     std::string                     port;
+    std::string                     userAgent;
     bool                            secure; //  SSL/TLS?
     std::string                     path;
     bool                            autoReconnect;
@@ -1470,20 +1476,28 @@ private:
         }
 
         m_state = State::OPEN;
-        
+
         if(m_connectOptions.secure) {
-            m_wss->async_handshake(
-                m_connectOptions.host,
-                m_connectOptions.path,
-                std::bind(&SCSocket::initialHandshakeHandler, shared_from_this(), std::placeholders::_1)
-            );
+            performHandshake(m_wss);
         } else {
-            m_ws->async_handshake(
-                m_connectOptions.host,
-                m_connectOptions.path,
-                std::bind(&SCSocket::initialHandshakeHandler, shared_from_this(), std::placeholders::_1)
-            );
-        }       
+            performHandshake(m_ws);
+        }
+    }
+
+    template <typename NextLayer>
+    void performHandshake(std::unique_ptr<NextLayer>& s) {
+        auto self(shared_from_this());
+
+        s->async_handshake_ex(
+            m_connectOptions.host,
+            m_connectOptions.path,
+            [ this, self ](boost::beast::websocket::request_type& req) {
+                if(!m_connectOptions.userAgent.empty()) {
+                    req.insert(boost::beast::http::field::user_agent, m_connectOptions.userAgent);
+                }
+            },
+            std::bind(&SCSocket::initialHandshakeHandler, shared_from_this(), std::placeholders::_1)
+        );
     }
 
     void initialHandshakeHandler(boost::system::error_code ec) {
