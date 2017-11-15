@@ -85,12 +85,12 @@ namespace detail {
     };
 }   //  end detail ns
 
-const boost::system::error_category& get_scio_error_category() {
+inline const boost::system::error_category& get_scio_error_category() {
     static detail::scio_error_category instance;
     return instance;
 }
 
-boost::system::error_code make_error_code(errors e) {
+inline boost::system::error_code make_error_code(errors e) {
     return boost::system::error_code(static_cast<int>(e), get_scio_error_category());
 }
 
@@ -389,8 +389,8 @@ public:
         return std::get<HandlerId>(m_eventTable).connect(std::forward<Args>(args)...);
     }
 
-    void unsubscribe();
-    void destroy();
+    inline void unsubscribe();
+    inline void destroy();
 
     ChannelState getState() const { return m_state; }
 
